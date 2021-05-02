@@ -1,34 +1,54 @@
-from csbuilder.session import SessionManager
-from csbuilder.packet import CannotExtractPacket, PacketUtil
+import threading
+from typing import Optional, Tuple
 
-from hks_pylib.logger import LoggerGenerator
-from hks_pynetwork.internal import ChannelClosed, LocalNode
+from hks_pylib.done import Done
+from hks_pylib.logger import LoggerGenerator, InvisibleLoggerGenerator
+from hks_pylib.logger.standard import StdLevels, StdUsers
+
+from hks_pynetwork.internal import LocalNode
+
+from csbuilder.pool import Pool
+from csbuilder.standard import Protocols
+from csbuilder.session import SessionManager
+from csbuilder.cspacket import CSPacket, CSPacketField, CSPacketUtil
+
+from hkserror import HTypeError
+from hks_pynetwork.errors.internal import ChannelClosedError
+
+from csbuilder.errors import ManagementScopeError
+from csbuilder.errors.packet import PacketExtractingError
 
 
 class Responser(object):
     def __init__(
                     self,
-                    name:str,
-                    session_manager: SessionManager,
-                    logger_generator: LoggerGenerator = ...,
-                    display: dict = ...
+                    name: Optional[str] = None,
+                    logger_generator: LoggerGenerator = InvisibleLoggerGenerator(),
+                    display: dict = {}
                 ) -> None:
-        assert isinstance(name, str)
-        assert isinstance(session_manager, SessionManager)
-        assert isinstance(display, dict)
+        if name is not None and not isinstance(name, str):
+            raise HTypeError("name", name, str, None)
+
+        if not isinstance(logger_generator, LoggerGenerator):
+            raise HTypeError("logger_generator", logger_generator, LoggerGenerator)
+
+        if not isinstance(display, dict):
+            raise HTypeError("display", display, dict)
+
         super().__init__()
         
         self._name = name
 
-        self._session_manager = session_manager
+        self._session_manager = SessionManager(
+                name="SessionManager of {}".format(self._name),
+                logger_generator=logger_generator,
+                display=display
+            )
 
         self._print = logger_generator.generate(
             name=name, 
             display=display
         )
-
-        self._external_scheme_type_group = self._session_manager._external_scheme_type_group
-        self._internal_scheme_type_group = self._session_manager._internal_scheme_type_group
 
         # Create nodes for communicating between objects in this program
         self._node = LocalNode(
@@ -37,66 +57,133 @@ class Responser(object):
             display=display
         )
 
-    def solve(self, source: str, packet_dict: dict):
-        response, destination = self._session_manager.response(source, packet_dict)
-        if response is not None:
-            self._node.send(destination, response)
+    def session_manager(self, session_manager: SessionManager = None) -> SessionManager:
+        if session_manager is None:
+            return self._session_manager
 
-    def is_valid_source(self, source: str, packet_dict: dict):
-        if packet_dict["scheme"] not in self._external_scheme_type_group and\
-            packet_dict["scheme"] not in self._internal_scheme_type_group:
-            self._print("dev", "warning", "Packet scheme is unknown ({})".format(packet_dict["scheme"]))
+        if not isinstance(session_manager, SessionManager):
+            raise HTypeError("session_manager", session_manager, SessionManager, None)
+
+        self._session_manager = session_manager
+
+    def wait_result(self, protocol: Protocols, timeout: float = None) -> Done:
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if timeout is not None and not isinstance(timeout, (int, float)):
+            raise HTypeError("timeout", timeout, int, float, None)
+
+        return self._session_manager.wait_result(protocol, timeout)
+
+    def get_response(self, source: str, packet: CSPacket) -> Tuple[str, CSPacket]:
+        if source is not None and not isinstance(source, str):
+            raise HTypeError("source", source, str, None)
+
+        if packet is not None and not isinstance(packet, CSPacket):
+            raise HTypeError("packet", packet, CSPacket, None)
+
+        if source is None or packet is None:
+            return
+
+        result = self._session_manager.respond(source, packet)
+
+        return result.destination, result.packet
+
+    def send_response(self, destination: str, response_packet: CSPacket) -> bool:
+        if destination is not None and not isinstance(destination, str):
+            raise HTypeError("destination", destination, str, None)
+
+        if response_packet is not None and not isinstance(response_packet, CSPacket):
+            raise HTypeError("response_packet", response_packet, CSPacket, None)
+
+        if destination and response_packet:
+            self._node.send(destination, response_packet.to_bytes())
+            return True
+
+        return False
+
+    def validate_packet(self, source: str, packet: CSPacket) -> bool:
+        if not isinstance(source, str):
+            raise HTypeError("source", source, str)
+
+        if not isinstance(packet, CSPacket):
+            raise HTypeError("packet", packet, CSPacket)
+
+        protocol = packet[CSPacketField.PROTOCOL]
+
+        if protocol not in self._session_manager.get_protocols():
+            self._print(StdUsers.DEV, StdLevels.WARNING, "Unknown protocol "
+            "({})".format(protocol.name))
             return False
 
         return True
 
-    def activate(self, activated_scheme_type: int, *args):
-        response_packet, des = self._session_manager.activate(activated_scheme_type, *args)
-        if response_packet is None or des is None:
-            return False
-        self._node.send(des, response_packet)
-        return True
+    def activate(self, protocol: Protocols, *args, **kwargs) -> bool:
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
 
+        if protocol not in self._session_manager.get_protocols():
+            raise ManagementScopeError("The protocol {} doesn't "
+            "belong to scope of {}.".format(protocol, self._session_manager._name))
 
-    def start(self):
-        self._print("user", "info", "Responser starts...")
-        self._print("dev", "info", "Responser started")
+        des, response_packet = self._session_manager.activate(
+                protocol,
+                *args,
+                **kwargs
+            )
+
+        return self.send_response(des, response_packet)
+
+    def _start(self) -> None:
+        self._print(StdUsers.USER, StdLevels.INFO, "Responser started.")
+        self._print(StdUsers.DEV, StdLevels.INFO, "Responser started")
         while True:
             try:
                 source, data, _ = self._node.recv()
-                if source == None:
-                    # if connection is alive, ignore error, print a warning and continue
-                    self._print("dev", "warning", "Something error when source is None")
-                    try:
-                        self._print("dev", "debug", PacketUtil.extract(data))
-                    except:
-                        self._print("dev", "debug", "Cannot print received data")
-                    continue
-            except ChannelClosed:
-                self._print("dev", "info", "Stop because Channel closed")
+            except ChannelClosedError:
+                self._print(StdUsers.DEV, StdLevels.INFO, "Stop because Channel closed.")
                 break
             except Exception as e:
-                self._print("user", "info", "Something errors when receving connection")
-                self._print("dev", "error", "Something errors when receving connection ({})".format(repr(e)))
+                self._print(StdUsers.USER, StdLevels.INFO, "Something errors when "
+                "receving connection.")
+                self._print(StdUsers.DEV, StdLevels.ERROR, "Something errors when "
+                "receving connection ({}).".format(repr(e)))
                 break
 
             try:
-                packet_dict = PacketUtil.extract(data)
-            except CannotExtractPacket as e:
-                self._print("dev", "warning", "Error when extract data ({})".format(repr(e)))
+                protocol = CSPacketUtil.get_protocol(data)
+                role = self._session_manager.get_session(protocol).role()
+                opposite_role = Pool.get_opposite_role(protocol, role)
+                packet = CSPacketUtil.extract(data, opposite_role)
+            except PacketExtractingError as e:
+                self._print(StdUsers.DEV, StdLevels.WARNING, "Error when data "
+                "extracting ({})".format(e))
                 continue
+            except KeyError:
+                self._print(StdUsers.DEV, StdLevels.WARNING, "Unknown packet protocols.")
             except Exception as e:
-                self._print("dev", "error", "Unknown error occurs when extract data ({})".format(repr(e)))
-                break
-
-            if not self.is_valid_source(source, packet_dict):
+                self._print(StdUsers.DEV, StdLevels.ERROR, "Unknown error occurs "
+                "when data extracting ({})".format(e))
                 continue
-            
-            self.solve(source, packet_dict)
 
-        self._node.close()
-        self._print("user", "info", "Responser stops")
-        self._print("dev", "info", "Responser stops")
+            if self.validate_packet(source, packet) is False:
+                continue
 
-    def close(self):
+            des, resp = self.get_response(source, packet)
+            self.send_response(des, resp)
+
+        self.close()
+        self._print(StdUsers.USER, StdLevels.INFO, "Responser stops")
+        self._print(StdUsers.DEV, StdLevels.INFO, "Responser stops")
+
+    def start(self, thread = False) -> None:
+        if thread:
+            threading.Thread(
+                    target=self._start,
+                    name=self._name
+                ).start()
+        else:
+            self._start()
+
+    def close(self) -> None:
         self._node.close()
