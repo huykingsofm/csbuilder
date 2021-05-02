@@ -138,14 +138,6 @@ class Session(object):
         if timeout is not None and timeout <= 0:
             raise HFormatError("The parameter timeout expected an positive number.")
 
-        while not self._is_running and (timeout is None or timeout > 0):
-            time.sleep(self.TIME_PERIODIC)
-            if timeout is not None:
-                timeout -= self.TIME_PERIODIC
-
-        if not self._is_running:
-            raise SessionError("The session must be begun before waiting its result.")
-
         while timeout is None or timeout > 0:
             if self._result != None:
                 result = self._result
