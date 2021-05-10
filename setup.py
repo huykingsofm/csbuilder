@@ -12,7 +12,7 @@ with open("CHANGELOG.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="csbuilder",
-    version="0.0.1",
+    version="0.0.2",
     author="huykingsofm",
     author_email="huykingsofm@gmail.com",
     description="The Python framework which is used to build complex Client-Server applications",
@@ -30,7 +30,7 @@ setuptools.setup(
     package_dir={"": "src"},
     packages=setuptools.find_packages(where="src"),
     python_requires=">=3.7.1",
-    install_requires=["hks_pynetwork==0.0.4"],
+    install_requires=["hks_pynetwork>=0.0.4", "hks_pylib>=0.0.7", "hkserror>=0.0.2"],
     setup_requires=["pytest-runner==4.4"],
     tests_require=["pytest==4.4.1"],
     test_suite="tests",

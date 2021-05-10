@@ -8,8 +8,8 @@ from hks_pylib.cryptography.ciphers.hkscipher import HKSCipher
 from hks_pylib.cryptography.ciphers.symmetrics import NoCipher
 from hks_pylib.logger import LoggerGenerator, InvisibleLoggerGenerator
 
-from csbuilder.standard import Protocols
 from csbuilder.responser import Responser
+from csbuilder.standard import Protocols, Roles
 
 from hkserror.hkserror import HFormatError, HTypeError
 from hks_pynetwork.errors.external import STCPSocketError
@@ -75,14 +75,17 @@ class ClientResponser(Responser):
                 display=display
             )
 
-    def activate(self, protocol: Protocols, *args, **kwargs) -> bool:
+    def activate(self, protocol: Protocols, role: Roles = None, *args, **kwargs) -> bool:
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
 
         if not self._socket.isworking():
             raise STCPSocketError("The socket is not started")
 
-        return super().activate(protocol, *args, **kwargs)
+        return super().activate(protocol, role, *args, **kwargs)
 
     def connect(self) -> None:
         self._socket.connect(self._address)

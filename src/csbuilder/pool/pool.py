@@ -3,21 +3,25 @@ from typing import Any, Callable, Dict, List, Tuple, Type
 from hks_pylib.hksenum import get_enum
 
 from csbuilder.scheme import Scheme
-from csbuilder.standard import StandardRole, Roles, Protocols, States
+from csbuilder.standard import Roles, Protocols, States
 
 from csbuilder.errors.pool import PoolError
 from csbuilder.errors.pool import PredefinitionError
 from hkserror.hkserror import HFormatError, HTypeError
 
 
-IS_PREPARING = "is_preparing"
+def is_preparing():
+    pass
 
+def none():
+    pass
 
 class SchemaStructure(object):
     def __init__(self) -> None:
         self._states: Type[States] = None
         self._scheme: Scheme = None
-        self._activation = None
+        self._active_activation = none
+        self._passive_activation = None
 
     def states(self, states: Type[States] = None) -> Type[States]:
         if states is None:
@@ -33,21 +37,37 @@ class SchemaStructure(object):
         assert issubclass(scheme, Scheme)
         self._scheme = scheme
 
-    def activation(self, activation = None):
-        if activation is None:
-            return self._activation
+    def active_activation(self, active_activation: Callable = None):
+        if active_activation is None:
+            if self._active_activation == none:
+                return None
+            return self._active_activation
 
-        self._activation = activation
+        if not callable(active_activation):
+            raise HTypeError("active_activation", active_activation, Callable, None)
+
+        self._active_activation = active_activation
+
+    def passive_activation(self, passive_activation: States = None):
+        if passive_activation is None:
+            return self._passive_activation
+
+        if not isinstance(passive_activation, States):
+            raise HTypeError("passive_activation", passive_activation, States, None)
+
+        self._passive_activation = passive_activation
 
     def __repr__(self) -> str:
         return str(self)
 
     def __str__(self) -> str:
-        return "{" + "scheme = {}, states = {}, activation = {}".format(
+        return ("{" + "scheme = {}, states = {}, active_activation = "
+                "{} passive_activation = {}".format(
                 self._scheme,
                 self._states,
-                self._activation
-            ) + "}"
+                self._active_activation,
+                self._passive_activation
+            ) + "}")
 
 
 class RevertSchemaStructure(object):
@@ -116,9 +136,6 @@ class Pool(object):
                 raise HFormatError("The role group must have exactly two elements.")
 
             for role in group:
-                if not isinstance(role.value, StandardRole):
-                    raise HTypeError("role,value", role.value, StandardRole)
-
                 if role in Pool.__protocols[protocol].keys():
                     raise PoolError("Role {} has already "
                     "defined in the protocol {}.".format(role, protocol))
@@ -168,7 +185,7 @@ class Pool(object):
         return __add_state
 
     @staticmethod
-    def scheme(protocol: Protocols, role: Roles, activation = None):
+    def scheme(protocol: Protocols, role: Roles, passive_activation: States = None):
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
 
@@ -183,31 +200,28 @@ class Pool(object):
             raise PoolError("The role {} has not been "
             "defined yet.".format(role))
 
+        if passive_activation is not None and not isinstance(passive_activation, States):
+            raise HTypeError("passive_activation", passive_activation, States, None)
+
         if Pool.__protocols[protocol][role].scheme() is not None:
             raise PoolError("The scheme of {}.{} has been "
             "already defined.".format(protocol.value, role.value))
 
-        if role.value == StandardRole.PASSIVE\
-            and not isinstance(activation, States):
-            raise HFormatError("PassiveScheme must define the activation state.")
-                
-        if role.value == StandardRole.ACTIVE\
-            and activation is not None:
-            raise HFormatError("ActiveScheme mustn't define the activate state.")
-
-        Pool.__protocols[protocol][role].activation(IS_PREPARING)
+        Pool.__protocols[protocol][role].passive_activation(passive_activation)
+        Pool.__protocols[protocol][role].active_activation(is_preparing)
 
         def _add_scheme(cls: Type[Scheme]):
             if not issubclass(cls, Scheme):
                 raise HTypeError("cls", cls, Type[Scheme])
 
-            validate_activation(cls, protocol, role, activation)
+            validate_activation(cls, protocol, role)
             validate_responses(cls, protocol, role)
 
             Pool.__protocols[protocol][role].scheme(cls)
-            if activation is not None:
-                Pool.__protocols[protocol][role].activation(activation)
             Pool.__schemes.update({cls: RevertSchemaStructure(protocol, role)})
+
+            if Pool.get_active_activation(protocol, role) is is_preparing:
+                Pool.__protocols[protocol][role].active_activation(none)
             return cls
 
         return _add_scheme
@@ -233,7 +247,7 @@ class Pool(object):
         return _add_response
 
     @staticmethod
-    def activation(method):
+    def active_activation(method):
         if not callable(method):
             raise HTypeError("method", method, Callable)
 
@@ -242,21 +256,20 @@ class Pool(object):
         count = 0
         for p in Pool.__protocols.keys():
             for r in Pool.__protocols[p].keys():
-                if Pool.__protocols[p][r].activation() == IS_PREPARING:
+                if Pool.__protocols[p][r].active_activation() == is_preparing:
                     count += 1
                     protocol = p
                     role = r
-        
+
         if count == 0:
-            raise PredefinitionError("The scheme's activation "
-            "must be a method of that scheme.")
+            raise PredefinitionError("Something wrongs. "
+            "There are no preparing activation.")
 
         if count > 1:
-            raise PredefinitionError("The class is only used for a scheme.")
+            raise PredefinitionError("Something wrongs. "
+            "There are many preparing activations.")
 
-        assert role.value == StandardRole.ACTIVE
-
-        Pool.__protocols[protocol][role].activation(method)
+        Pool.__protocols[protocol][role].active_activation(method)
         return method
 
     @staticmethod
@@ -341,7 +354,7 @@ class Pool(object):
         return Pool.__responses[state]
 
     @staticmethod
-    def get_activation(protocol: Protocols, role: Roles):
+    def get_active_activation(protocol: Protocols, role: Roles):
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
         
@@ -356,7 +369,25 @@ class Pool(object):
             raise PoolError("The role {} doesn't exist in "
             "Pool.{}.".format(role, protocol.name))
 
-        return Pool.__protocols[protocol][role].activation()
+        return Pool.__protocols[protocol][role].active_activation()
+
+    @staticmethod
+    def get_passive_activation(protocol: Protocols, role: Roles):
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles)
+
+        if protocol not in Pool.__protocols.keys():
+            raise PoolError("The protocol {} doesn't exist "
+            "in Pool.".format(protocol))
+
+        if role not in Pool.__protocols[protocol].keys():
+            raise PoolError("The role {} doesn't exist in "
+            "Pool.{}.".format(role, protocol.name))
+
+        return Pool.__protocols[protocol][role].passive_activation()
 
     @staticmethod
     def revert_scheme(scheme: Type[Scheme]) -> Tuple[Protocols, Roles]:
@@ -391,39 +422,33 @@ class Pool(object):
         return Pool.revert_states(states)
 
 
-def validate_activation(cls: Type[Scheme], protocol, role, activation):
-    if role.value == StandardRole.PASSIVE:
-        opposite_role = Pool.get_opposite_role(protocol, role)
-        opposite_states = Pool.get_states(protocol, opposite_role)
-        
-        if Pool.get_activation(protocol, role) is not IS_PREPARING:
-            raise PredefinitionError("Activation of PassiveScheme is defined incorrectly.")
-        
-        if activation not in opposite_states:
-            raise PredefinitionError("Activation of PassiveScheme must "
-            "be a state of the opposite scheme.")
-    else:
-        activation_method = Pool.get_activation(protocol, role)
-        if activation_method is None:
-            raise PredefinitionError("Invalid scheme/activation ({}/{}). "
-            "Requiring the activation belonging to the scheme.".format(
-                cls, activation_method))
+def validate_activation(cls: Type[Scheme], protocol, role):
+    opposite_role = Pool.get_opposite_role(protocol, role)
+    opposite_states = Pool.get_states(protocol, opposite_role)
 
-        if activation_method not in cls.__dict__.values():
-            raise PredefinitionError("Invalid scheme/activation ({}/{}). "
-            "Requiring the activation belonging to the scheme.".format(
-                cls, activation_method))
+    passive_activation = Pool.get_passive_activation(protocol, role)
+    if passive_activation and passive_activation not in opposite_states:
+        raise PredefinitionError("The passive activation must "
+        "be a state of the opposite scheme.")
 
+    active_activation = Pool.get_active_activation(protocol, role)
+    if active_activation != is_preparing and active_activation not in cls.__dict__.values():
+        raise PredefinitionError("The active activation must be a "
+        "method of the scheme class.")
+
+    if not active_activation and not passive_activation:
+        raise PredefinitionError("A scheme must have at least a "
+        "activation type (active activation or passive activation).")
 
 def validate_responses(cls: Type[Scheme], protocol: Protocols, role: Roles):
     opposite_role = Pool.get_opposite_role(protocol, role)
     opposite_states = Pool.get_states(protocol, opposite_role)
+
     for state in opposite_states:
         response = Pool.get_response(state)
         if response is None:
-            raise PredefinitionError("Invalid scheme/response ({}/{}). "
-            "Requiring responses belonging to the scheme.".format(cls, response))
+            raise PredefinitionError("There is no definition of the state {}.".format(state))
 
         if response not in cls.__dict__.values():
-            raise PredefinitionError("Invalid scheme/response ({}/{}). "
-            "Requiring responses belonging to the scheme.".format(cls, response))
+            raise PredefinitionError("Scheme and response are mismatched ({}/{}). "
+            "Requiring the response belonging to the scheme.".format(cls, response))

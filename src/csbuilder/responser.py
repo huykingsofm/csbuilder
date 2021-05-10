@@ -2,20 +2,18 @@ import threading
 from typing import Optional, Tuple
 
 from hks_pylib.done import Done
-from hks_pylib.logger import LoggerGenerator, InvisibleLoggerGenerator
 from hks_pylib.logger.standard import StdLevels, StdUsers
+from hks_pylib.logger import LoggerGenerator, InvisibleLoggerGenerator
 
 from hks_pynetwork.internal import LocalNode
 
-from csbuilder.pool import Pool
-from csbuilder.standard import Protocols
+from csbuilder.standard import Protocols, Roles
 from csbuilder.session import SessionManager
-from csbuilder.cspacket import CSPacket, CSPacketField, CSPacketUtil
+from csbuilder.cspacket import CSPacket, CSPacketField
 
 from hkserror import HTypeError
 from hks_pynetwork.errors.internal import ChannelClosedError
 
-from csbuilder.errors import ManagementScopeError
 from csbuilder.errors.packet import PacketExtractingError
 
 
@@ -66,14 +64,35 @@ class Responser(object):
 
         self._session_manager = session_manager
 
-    def wait_result(self, protocol: Protocols, timeout: float = None) -> Done:
+    def get_scheme(self, protocol: Protocols, role: Roles = None):
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
+
+        return self._session_manager.get_scheme(protocol, role)
+
+    def get_session(self, protocol: Protocols, role: Roles = None):
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
+
+        return self._session_manager.get_session(protocol, role) 
+
+    def wait_result(self, protocol: Protocols, role: Roles = None, timeout: float = None) -> Done:
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
 
         if timeout is not None and not isinstance(timeout, (int, float)):
             raise HTypeError("timeout", timeout, int, float, None)
 
-        return self._session_manager.wait_result(protocol, timeout)
+        return self._session_manager.wait_result(protocol, role, timeout)
 
     def get_response(self, source: str, packet: CSPacket) -> Tuple[str, CSPacket]:
         if source is not None and not isinstance(source, str):
@@ -118,16 +137,16 @@ class Responser(object):
 
         return True
 
-    def activate(self, protocol: Protocols, *args, **kwargs) -> bool:
+    def activate(self, protocol: Protocols, role: Roles = None, *args, **kwargs) -> bool:
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
 
-        if protocol not in self._session_manager.get_protocols():
-            raise ManagementScopeError("The protocol {} doesn't "
-            "belong to scope of {}.".format(protocol, self._session_manager._name))
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
 
         des, response_packet = self._session_manager.activate(
                 protocol,
+                role,
                 *args,
                 **kwargs
             )
@@ -151,10 +170,7 @@ class Responser(object):
                 break
 
             try:
-                protocol = CSPacketUtil.get_protocol(data)
-                role = self._session_manager.get_session(protocol).role()
-                opposite_role = Pool.get_opposite_role(protocol, role)
-                packet = CSPacketUtil.extract(data, opposite_role)
+                packet = CSPacket.from_bytes(data)
             except PacketExtractingError as e:
                 self._print(StdUsers.DEV, StdLevels.WARNING, "Error when data "
                 "extracting ({})".format(e))
@@ -166,11 +182,16 @@ class Responser(object):
                 "when data extracting ({})".format(e))
                 continue
 
-            if self.validate_packet(source, packet) is False:
-                continue
+            try:
+                if self.validate_packet(source, packet) is False:
+                    continue
 
-            des, resp = self.get_response(source, packet)
-            self.send_response(des, resp)
+                des, resp = self.get_response(source, packet)
+                self.send_response(des, resp)
+            except Exception as e:
+                self._print(StdUsers.DEV, StdLevels.ERROR, "Unknown error occurs "
+                "when solving data ({})".format(e))
+                continue
 
         self.close()
         self._print(StdUsers.USER, StdLevels.INFO, "Responser stops")

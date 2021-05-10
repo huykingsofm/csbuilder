@@ -6,9 +6,10 @@ from hks_pylib.logger import StandardLoggerGenerator
 
 from csbuilder.cspacket import CSPacketField
 from csbuilder.cspacket import CSPacket
-from csbuilder.session import SessionManager, PassiveSession
+from csbuilder.session import SessionManager
+from csbuilder.session.session import Session
 
-from tests.schemes import MyProtocols
+from tests.schemes import MyProtocols, SubmitRoles
 from tests.submit_scheme import SubmitClientStates, SubmitServerStates
 from tests.submit_scheme import SubmitServerScheme, SubmitClientScheme
 
@@ -18,18 +19,19 @@ logger_generator = StandardLoggerGenerator("tests/test_session.log")
 
 def test_session():
     scheme = SubmitServerScheme()
-    session = PassiveSession(
-        scheme=scheme,
-        timeout=3,
-        name="Test Session",
-        logger_generator=logger_generator,
-        display={StdUsers.USER: Display.ALL, StdUsers.DEV: Display.ALL}
-    )
+    session = Session(
+            scheme=scheme,
+            timeout=3,
+            name="Test Session",
+            logger_generator=logger_generator,
+            display={StdUsers.USER: Display.ALL, StdUsers.DEV: Display.ALL}
+        )
 
     ############################################################
     print("Send send packet --> reset packet")
     send_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.CLIENT,
             SubmitClientStates.SEND
         )
     result = session.respond("Somewhere", send_packet)
@@ -39,6 +41,7 @@ def test_session():
     print("Send request packet --> return accept packet, timeout")
     request_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.CLIENT,
             SubmitClientStates.REQUEST
         )
 
@@ -56,6 +59,7 @@ def test_session():
     print("Send request --> accept; Send send --> accept;")
     request_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.CLIENT,
             SubmitClientStates.REQUEST
         )
     result = session.respond("Somewhere", request_packet)
@@ -64,6 +68,7 @@ def test_session():
 
     send_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.CLIENT,
             SubmitClientStates.SEND
         )
     result = session.respond("Somewhere", send_packet)
@@ -110,15 +115,17 @@ def test_session_manager():
     # Activate --> request packet
     expected_request_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.CLIENT,
             SubmitClientStates.REQUEST
         )
-    source, request_packet = session_manager_client.activate(MyProtocols.SUBMIT)
+    source, request_packet = session_manager_client.activate(MyProtocols.SUBMIT, SubmitRoles.CLIENT)
 
     assert request_packet.state() == expected_request_packet.state()
     
     # Send request packet to responser --> accept packet
     expected_accept_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.SERVER,
             SubmitServerStates.ACCEPT
         )
     accept_result = session_manager_server.respond("Somewhere", request_packet)
@@ -127,6 +134,7 @@ def test_session_manager():
     # Send accept packet to requester --> send packet
     expected_send_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.CLIENT,
             SubmitClientStates.SEND
         )
     send_result = session_manager_client.respond("Somewhere", accept_result.packet)
@@ -135,6 +143,7 @@ def test_session_manager():
     # Send "send" packet to responser --> success packet, responser end session
     expected_success_packet = CSPacket(
             MyProtocols.SUBMIT,
+            SubmitRoles.SERVER,
             SubmitServerStates.SUCCESS
         )
     success_result = session_manager_server.respond("Somewhere", send_result.packet)

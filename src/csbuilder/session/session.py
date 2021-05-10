@@ -1,7 +1,7 @@
 import time
 import copy
 import threading
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Tuple
 
 from hks_pylib.done import Done
 from hks_pylib.hksenum import HKSEnum
@@ -17,13 +17,14 @@ from csbuilder.scheme import SchemeResult
 
 from csbuilder.cspacket import CSPacket
 from csbuilder.session.result import SessionResult
-from csbuilder.standard import Protocols, StandardRole, States
+from csbuilder.standard import Protocols, States
 
 
 from hkserror import HTypeError
 from hkserror import HFormatError
+from csbuilder.errors import CSError
 from csbuilder.errors.scheme import SchemeError
-from csbuilder.errors.session import SessionError
+from csbuilder.errors.session import InProcessError
 from csbuilder.errors.pool import PredefinitionError
 
 
@@ -68,20 +69,21 @@ class Session(object):
         self._scheme = scheme
         self._protocol, self._role = scheme.protocol(), scheme.role()
 
-        self._activation = Pool.get_activation(self._protocol, self._role)
-        if self._activation is None:
-            raise PredefinitionError("The activation must be defined "
+        self._active_activation = Pool.get_active_activation(self._protocol, self._role)
+        self._passive_activation = Pool.get_passive_activation(self._protocol, self._role)
+
+        if not self._active_activation and not self._passive_activation:
+            raise PredefinitionError("At least one activation must be defined "
             "in the scheme before creating a session.")
 
-        if self._role.value == StandardRole.ACTIVE:
-            self._activation = func2method(self._activation, self._scheme)
+        if self._active_activation:
+            self._active_activation = func2method(self._active_activation, self._scheme)
 
-            if self._activation is None:
-                raise PredefinitionError("The predefined activation must be a method of "
-                "the scheme {}.".format(type(scheme).__name__))
+            if self._active_activation is None:
+                raise PredefinitionError("The active_activation must be a method "
+                "of {}".format(type(scheme).__name__))
 
-        states = Pool.get_states(self._protocol, self._role)
-        self._ignore_packet = CSPacket(self._protocol, states.IGNORE)
+        self._ignore_packet = scheme.generate_packet(scheme._states.IGNORE)
 
         self._response_methods: Dict[States, Any] = {}
 
@@ -92,12 +94,12 @@ class Session(object):
 
             if resp_method is None:
                 raise PredefinitionError("The predefined response must be a method of "
-                "the scheme {}".format(type(scheme).__name__))
+                "{}".format(type(scheme).__name__))
 
             self._response_methods.update({state: resp_method})
 
         self._timeout_hook: Dict[Any, Dict[HookArgument, object]] = {}
-        self._activate_hook: Dict[Any, Dict[HookArgument, object]] = {}
+        self._begin_hook: Dict[Any, Dict[HookArgument, object]] = {}
         self._cancel_hook: Dict[Any, Dict[HookArgument, object]] = {}
 
         self._result = None
@@ -141,7 +143,7 @@ class Session(object):
         while timeout is None or timeout > 0:
             if self._result != None:
                 result = self._result
-                self._set_result(Done(None))
+                self._set_result(Done(None, where="wait_result"))
                 return result
 
             time.sleep(self.TIME_PERIODIC)
@@ -160,8 +162,13 @@ class Session(object):
         return self._scheme
 
     def clone(self):
+        if hasattr(self._scheme, "clone"):
+            copy_scheme = self._scheme.clone()
+        else:
+            copy_scheme = copy.deepcopy(self._scheme)
+
         new_session = type(self)(
-                        scheme=copy.deepcopy(self._scheme),
+                        scheme=copy_scheme,
                         timeout=self._timeout,
                         name=self._name,
                         logger_generator=self._logger_generator,
@@ -169,7 +176,7 @@ class Session(object):
                     )
 
         new_session._timeout_hook = self._timeout_hook.copy()
-        new_session._activate_hook = self._activate_hook.copy()
+        new_session._begin_hook = self._begin_hook.copy()
         new_session._cancel_hook = self._cancel_hook.copy()
 
         return new_session
@@ -189,7 +196,7 @@ class Session(object):
         if hook_fn is None or not callable(hook_fn):
             raise HTypeError("hook_fn", hook_fn, Callable)
 
-        self._activate_hook.update({
+        self._begin_hook.update({
                 hook_fn: {
                     HookArgument.ARGS: args,
                     HookArgument.KWARGS: kwargs
@@ -206,6 +213,19 @@ class Session(object):
                     HookArgument.KWARGS: kwargs
                 }
             })
+
+    def activate(self, *args, **kwargs) -> Tuple[str, CSPacket]:
+        if self._is_running:
+            raise InProcessError("The session is running, cannot call again.")
+
+        des, packet = self._active_activation(*args, **kwargs)
+        if packet is not None:
+            self._print(StdUsers.DEV, StdLevels.DEBUG, "Calling activate() session")
+            self.begin()
+        else:
+            raise CSError("The packet is None, it can not begin the session.")
+
+        return des, packet
 
     def respond(self,
             source: str,
@@ -224,6 +244,10 @@ class Session(object):
             raise PredefinitionError("Please assign a method "
             "to respond this state ({})").format(state)
 
+        if state == self._passive_activation:
+            if not self._is_running:
+                self.begin()
+
         if self._is_running:
             self._set_time_counter(self._timeout)  # reset the counter
         else:
@@ -241,10 +265,12 @@ class Session(object):
 
         if not scheme_result.is_continue:
             self.cancel()
+            if scheme_result.result == None:
+                self._set_result(Done(False, reason = "Automatic result (canceled)"))
 
         return SessionResult(scheme_result.destination, scheme_result.packet)
 
-    def begin(self, *args, **kwargs) -> None:
+    def begin(self) -> None:
         if self._is_running:
             raise SchemeError("Can not begin the session when it is in process.")
 
@@ -252,7 +278,7 @@ class Session(object):
 
         self._print(StdUsers.DEV, StdLevels.DEBUG, "Session began.")
         self._cancel_the_timeout = False
-        run_hook(self._protocol, self._activate_hook)
+        run_hook(self._protocol, self._begin_hook)
 
         counter_thread = threading.Thread(
                 target=self._time_counter,

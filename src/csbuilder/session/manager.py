@@ -5,17 +5,15 @@ from hks_pylib.logger import InvisibleLoggerGenerator
 from hks_pylib.logger.standard import StdLevels, StdUsers
 
 from csbuilder.cspacket import CSPacket
+from csbuilder.pool.pool import Pool
 from csbuilder.scheme.scheme import Scheme
 from csbuilder.session.result import SessionResult
-from csbuilder.standard import Protocols, StandardRole
+from csbuilder.standard import Protocols, Roles
 
-from csbuilder.session.active import ActiveSession
-from csbuilder.session.passive import PassiveSession
 from csbuilder.session.session import Session, HookArgument
 
-from hkserror.hkserror import HTypeError
+from hkserror.hkserror import HFormatError, HTypeError
 from csbuilder.errors import ManagementScopeError
-from csbuilder.errors.session import SessionError
 
 
 class SessionManager(object):
@@ -35,7 +33,7 @@ class SessionManager(object):
         if not isinstance(display, dict):
             raise HTypeError("display", display, dict)
 
-        self.__sessions: Dict[Protocols, Session] = {}
+        self.__sessions: Dict[Protocols, Dict[Roles, Session]] = {}
 
         self._name = name
 
@@ -50,9 +48,9 @@ class SessionManager(object):
         self._cancle_hook: Dict[Any, Dict[HookArgument, object]] = {}
 
     def get_protocols(self) -> List[Protocols]:
-        return self.__sessions.keys()
+        return list(self.__sessions.keys())
 
-    def get_session(self, protocol: Protocols):
+    def get_roles(self, protocol: Protocols) -> List[Roles]:
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
 
@@ -60,17 +58,55 @@ class SessionManager(object):
             raise ManagementScopeError("The protocol {} doesn't "
             "belong to the management of {}".format(protocol, self._name))
 
-        return self.__sessions[protocol]
+        return list(self.__sessions[protocol].keys())
 
-    def get_scheme(self, protocol: Protocols):
+    def get_session(self, protocol: Protocols, role: Roles = None) -> Session:
         if not isinstance(protocol, Protocols):
             raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
 
         if protocol not in self.__sessions.keys():
             raise ManagementScopeError("The protocol {} doesn't "
             "belong to the management of {}".format(protocol, self._name))
 
-        return self.__sessions[protocol].scheme()
+        if role is None:
+            if len(self.get_roles(protocol))> 1:
+                raise HFormatError("There are more than one roles "
+                "in the {}, role must be passed.".format(protocol))
+
+            role = self.get_roles(protocol)[0]
+        else:
+            if role not in self.__sessions[protocol].keys():
+                raise ManagementScopeError("The role {} of the protocol {} doesn't "
+                "belong to the management of {}".format(role, protocol, self._name))
+
+        return self.__sessions[protocol][role]
+
+    def get_scheme(self, protocol: Protocols, role: Roles = None) -> Scheme:
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
+
+        if protocol not in self.__sessions.keys():
+            raise ManagementScopeError("The protocol {} doesn't "
+            "belong to the management of {}".format(protocol, self._name))
+
+        if role is None:
+            if len(self.get_roles(protocol))> 1:
+                raise HFormatError("There are more than one roles "
+                "in the {}, role must be passed.".format(protocol))
+
+            role = self.get_roles(protocol)[0]
+        else:
+            if role not in self.__sessions[protocol].keys():
+                raise ManagementScopeError("The role {} of the protocol {} doesn't "
+                "belong to the management of {}".format(role, protocol, self._name))
+
+        return self.__sessions[protocol][role].scheme()
 
     def create_session(
                     self,
@@ -86,8 +122,11 @@ class SessionManager(object):
         if not isinstance(scheme, Scheme):
             raise HTypeError("protocol", scheme, Scheme)
 
-        if scheme.protocol() in self.__sessions.keys():
-            raise ManagementScopeError("The protocol of scheme {} has "
+        protocol = scheme.protocol()
+        role = scheme.role()
+
+        if protocol in self.__sessions.keys() and role in self.__sessions[protocol].keys():
+            raise ManagementScopeError("The scheme {} has "
             "been created in {}".format(type(scheme).__name__, self._name))
 
         if self._name:
@@ -104,13 +143,8 @@ class SessionManager(object):
             display = self._display
         else:
             display = display
-
-        if scheme.role().value == StandardRole.ACTIVE:
-            _cls = ActiveSession
-        else:
-            _cls = PassiveSession
         
-        session = _cls(
+        session = Session(
                 scheme=scheme,
                 timeout=timeout,
                 name=session_name,
@@ -133,7 +167,10 @@ class SessionManager(object):
             kwargs = self._cancle_hook[hook_fn][HookArgument.KWARGS]
             session.add_cancle_hook(hook_fn, *args, **kwargs)
 
-        self.__sessions.update({scheme.protocol(): session})
+        if protocol not in self.__sessions.keys():
+            self.__sessions[protocol] = {}
+
+        self.__sessions[protocol][role] = session
 
         self._print(StdUsers.DEV, StdLevels.DEBUG, "You added a "
         "{} session".format(session_name))
@@ -150,8 +187,9 @@ class SessionManager(object):
                 }
             })
 
-        for session in self.__sessions.values():
-            session.add_timeout_hook(hook_fn, *args, **kwargs)
+        for protocol in self.__sessions.keys():
+            for role in self.__sessions[protocol].keys():
+                self.__sessions[protocol][role].add_timeout_hook(hook_fn, *args, **kwargs)
 
     def add_begin_hook(self, hook_fn, *args, **kwargs) -> None:
         if hook_fn is None or not callable(hook_fn):
@@ -164,8 +202,9 @@ class SessionManager(object):
                 }
             })
 
-        for session in self.__sessions.values():
-            session.add_begin_hook(hook_fn, *args, **kwargs)
+        for protocol in self.__sessions.keys():
+            for role in self.__sessions[protocol].keys():
+                self.__sessions[protocol][role].add_begin_hook(hook_fn, *args, **kwargs)
 
     def add_cancel_hook(self, hook_fn, *args, **kwargs) -> None:
         if hook_fn is None or not callable(hook_fn):
@@ -178,22 +217,18 @@ class SessionManager(object):
                 }
             })
 
-        for session in self.__sessions.values():
-            session.add_cancle_hook(hook_fn, *args, **kwargs)
+        for protocol in self.__sessions.keys():
+            for role in self.__sessions[protocol].keys():
+                self.__sessions[protocol][role].add_cancle_hook(hook_fn, *args, **kwargs)
 
-    def activate(self, protocol: Protocols, *args, **kwargs) -> Tuple[str, CSPacket]:
-        if not isinstance(protocol, Protocols):
-            raise HTypeError("protocol", protocol, Protocols)
-
-        if protocol not in self.__sessions.keys():
-            raise ManagementScopeError("The protocol {} doesn't belong "
-            "to the management of {}".format(protocol, self._name))
-
-        if not isinstance(self.__sessions[protocol], ActiveSession):
-            raise SessionError("Only ActiveSession objects can call the "
-            "method activate() from SessionManager.")
-        
-        return self.__sessions[protocol].begin(*args, **kwargs)
+    def activate(self,
+                protocol: Protocols,
+                role: Roles = None,
+                *args,
+                **kwargs
+            ) -> Tuple[str, CSPacket]:
+        session = self.get_session(protocol, role)
+        return session.activate(*args, **kwargs)
 
     def respond(self,
             source: str,
@@ -208,16 +243,19 @@ class SessionManager(object):
             raise HTypeError("packet", packet, CSPacket)
 
         protocol = packet.protocol()
+        role = packet.role()
 
-        session = self.get_session(protocol)
+        opposite_role = Pool.get_opposite_role(protocol, role)
+
+        session = self.get_session(protocol, opposite_role)
 
         return session.respond(source, packet, *args, **kwargs)
 
-    def wait_result(self, protocol: Protocols, timeout: float = None):
+    def wait_result(self, protocol: Protocols, role: Roles = None, timeout: float = None):
         if timeout is not None and not isinstance(timeout, (int, float)):
             raise HTypeError("timeout", timeout, int, float, None)
 
-        session = self.get_session(protocol)
+        session = self.get_session(protocol, role)
 
         return session.wait_result(timeout)
 
@@ -233,7 +271,11 @@ class SessionManager(object):
         new_session_manager._cancle_hook = self._cancle_hook.copy()
 
         for protocol in self.__sessions.keys():
-            new_session_manager.__sessions[protocol] = self.__sessions[protocol].clone()
+            new_session_manager.__sessions[protocol] = {}
+
+            for role in self.__sessions[protocol].keys():
+                new_session_manager.__sessions[protocol][role] =\
+                    self.__sessions[protocol][role].clone()
         
         return new_session_manager
 
@@ -247,4 +289,8 @@ class SessionManager(object):
 
         for protocol in another.get_protocols():
             if protocol not in self.get_protocols():
-                self.__sessions[protocol] = another.__sessions[protocol].clone()
+                self.__sessions[protocol] = {}
+
+            for role in another.get_roles(protocol):
+                self.__sessions[protocol][role] =\
+                    another.__sessions[protocol][role].clone()

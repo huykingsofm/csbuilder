@@ -40,7 +40,7 @@ $ path/to/your/venv/Scripts/activate.bat
 Just use `import` statement and enjoy it. We will write documentation and tutorials as soon as possible so that you can understand our library easier.
 
 ```python
-from csbuilder.server import Listener
+from csbuilder.listener import Listener
 from csbuilder.client import ClientResponser
 ```
 

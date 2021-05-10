@@ -1,5 +1,5 @@
 import csbuilder
-from csbuilder.standard import StandardRole, Protocols, Roles
+from csbuilder.standard import Protocols, Roles
 
 
 @csbuilder.protocols
@@ -10,11 +10,11 @@ class MyProtocols(Protocols):
 
 @csbuilder.roles(protocol=MyProtocols.SUBMIT)
 class SubmitRoles(Roles):
-    SERVER = StandardRole.PASSIVE
-    CLIENT = StandardRole.ACTIVE
+    SERVER = 0
+    CLIENT = 1
 
 
 @csbuilder.roles(protocol=MyProtocols.CONTROL)
 class ControlRoles(Roles):
-    DRIVER = StandardRole.ACTIVE
-    DEVICE = StandardRole.PASSIVE
+    DRIVER = 0
+    DEVICE = 1

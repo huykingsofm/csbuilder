@@ -1,9 +1,11 @@
+from socket import timeout
 import threading
 import time
 
 from hks_pylib.logger.standard import StdUsers
+from tests import schemes
 
-from tests.schemes import MyProtocols
+from tests.schemes import MyProtocols, SubmitRoles
 from tests.submit_scheme import SubmitServerScheme, SubmitClientScheme
 
 from csbuilder.server import Listener
@@ -24,16 +26,23 @@ def run_listener():
         logger_generator=logger_generator,
         display={StdUsers.USER: Display.ALL, StdUsers.DEV: Display.ALL}
     )
-    listener.session_manager().create_session(
-        scheme=SubmitServerScheme(),
-        timeout=3,
-        logger_generator=logger_generator,
-        display={StdUsers.USER: Display.ALL, StdUsers.DEV: Display.ALL}
-    )
-
+    listener.session_manager().create_session(scheme=SubmitServerScheme())
+    listener.session_manager().create_session(scheme=SubmitClientScheme())
     listener.listen()
-    listener.accept()
+
+    responser = listener.accept(False)
+    responser.session_manager().get_scheme(MyProtocols.SUBMIT, SubmitRoles.SERVER).config(
+            forwarder_name = responser._forwarder.name
+        )
+    responser.session_manager().get_scheme(MyProtocols.SUBMIT, SubmitRoles.CLIENT).config(
+            responser._forwarder.name
+        )
+    responser.start(True)
+    result = responser.activate(MyProtocols.SUBMIT, SubmitRoles.CLIENT)
+    print("ACTIVATE RESULT", result)
     listener.close()
+    print(responser.wait_result(MyProtocols.SUBMIT, SubmitRoles.CLIENT, timeout = 5))
+    responser.close()
 
 def run_client():
     logger_generator = StandardLoggerGenerator("tests/test_client.log")
@@ -47,16 +56,21 @@ def run_client():
     )
 
     client.session_manager().create_session(
-        scheme=SubmitClientScheme(client._forwarder.name),
-        timeout=3,
-        logger_generator=logger_generator,
-        display={StdUsers.USER: Display.ALL, StdUsers.DEV: Display.ALL}
+        scheme=SubmitClientScheme(client._forwarder.name)
+    )
+
+    client.session_manager().create_session(
+        scheme=SubmitServerScheme(client._forwarder.name)
     )
 
     client.connect()
     client.start(True)
-    print("ACTIVATE's RESULT:", client.activate(MyProtocols.SUBMIT))
-    print("SCHEME's RESULT:", client.wait_result(MyProtocols.SUBMIT))
+    print("SCHEME's RESULT:", client.wait_result(
+            MyProtocols.SUBMIT,
+            SubmitRoles.SERVER,
+            timeout = 5
+            )
+        )
     client.close()
 
 def test_client_server():

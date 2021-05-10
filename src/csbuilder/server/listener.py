@@ -2,18 +2,18 @@ import socket
 from typing import Iterable, Type
 
 from hks_pylib.hksenum import HKSEnum
+from hks_pylib.logger.standard import StdLevels, StdUsers
 from hks_pylib.cryptography.ciphers.hkscipher import HKSCipher
 from hks_pylib.cryptography.ciphers.symmetrics import NoCipher
 from hks_pylib.logger import LoggerGenerator, InvisibleLoggerGenerator
-from hks_pylib.logger.standard import StdLevels, StdUsers
 
 from hks_pynetwork.external import STCPSocket
 
 from csbuilder.session import SessionManager
+from csbuilder.standard import Protocols, Roles
 from csbuilder.server.responser import ServerResponser
 
 from hkserror.hkserror import HFormatError, HTypeError
-
 
 
 class ResponserInfo(HKSEnum):
@@ -92,10 +92,28 @@ class Listener(object):
                 logger_generator=logger_generator,
                 display=display
             )
-        
+
     def session_manager(self) -> SessionManager:
         return self._session_manager
 
+    def get_scheme(self, protocol: Protocols, role: Roles = None):
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
+
+        return self._session_manager.get_scheme(protocol, role)
+
+    def get_session(self, protocol: Protocols, role: Roles = None):
+        if not isinstance(protocol, Protocols):
+            raise HTypeError("protocol", protocol, Protocols)
+
+        if role is not None and not isinstance(role, Roles):
+            raise HTypeError("role", role, Roles, None)
+
+        return self._session_manager.get_session(protocol, role) 
+        
     def config_responser(self, *args, **kwargs) -> None:
         if args:
             self._responser[ResponserInfo.ARGS] = args

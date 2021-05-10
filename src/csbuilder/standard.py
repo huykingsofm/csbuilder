@@ -1,41 +1,41 @@
-from hks_pylib.math import Bitwise
 from hks_pylib.hksenum import HKSEnum
 
-from hkserror import HFormatError, HTypeError
+from csbuilder.util import LimitedInt, INT_SIZE
 
 
-INT_SIZE = 2
+PROTOCOL_SIZE = 4
+STATE_SIZE = 2
+ROLE_SIZE = 1
 
 
-class LimitedInt(object):
-    LOW = 0
-    HIGH = Bitwise.max_natural_number(INT_SIZE * 8)
-    def __init__(self, value: int) -> None:
-        if not isinstance(value, int):
-            raise HTypeError("value", value, int)
-
-        if value < LimitedInt.LOW or value > LimitedInt.HIGH:
-            raise HFormatError("Parameter value expected to "
-            "be between {} and {}, but got {}.".format(LimitedInt.LOW, LimitedInt.HIGH, value))
-        
-        self._value = value
-
-    def to_bytes(self, length, byteorder):
-        return self._value.to_bytes(length, byteorder)
+class ProtocolInt(LimitedInt):
+    ...
 
 
-class Protocols(LimitedInt, HKSEnum):
-    pass
+ProtocolInt.config(size=PROTOCOL_SIZE)
 
 
-class States(LimitedInt, HKSEnum):
-    pass
+class StateInt(LimitedInt):
+    ...
 
 
-class StandardRole(HKSEnum):
-    ACTIVE = "active"
-    PASSIVE = "passive"
+StateInt.config(size=STATE_SIZE)
 
 
-class Roles(HKSEnum):
-    pass
+class RoleInt(LimitedInt):
+    ...
+
+
+RoleInt.config(low=0, high=1)
+
+
+class Protocols(ProtocolInt, HKSEnum):
+    ...
+
+
+class States(StateInt, HKSEnum):
+    ...
+
+
+class Roles(RoleInt, HKSEnum):
+    ...

@@ -6,7 +6,7 @@ from csbuilder.standard import States
 from csbuilder.scheme.result import SchemeResult
 from csbuilder.cspacket.cspacket import CSPacket
 
-from hkserror.hkserror import HTypeError
+from hkserror.hkserror import HFormatError, HTypeError
 from csbuilder.errors import ManagementScopeError
 
 
@@ -18,11 +18,6 @@ class Scheme(object):
         self._states = Pool.get_states(self._protocol, self._role)
 
         self._is_running = False
-
-        self._ignore_packet = CSPacket(
-                self._protocol,
-                self._states.IGNORE
-            )
 
     def protocol(self):
         return self._protocol
@@ -39,21 +34,6 @@ class Scheme(object):
     def cancel(self, *args, **kwargs) -> None:
         self._is_running = False
 
-    def __sample_states(
-            self,
-            source: str,
-            packet: CSPacket,
-            *args,
-            **kwargs
-        ) -> Tuple[str, CSPacket, bool, Done]:
-        packet = CSPacket(self._scheme, self._states.REQUEST)
-        destination = "Forwarder"  # Destination of packet
-        cont = True  # Continue scheme
-        result = Done(False)  # result of the scheme 
-                        # (result is normally None, but if cont = False,
-                        # result can be set to not-None value)
-        return destination, packet.create(), cont, result
-
     def generate_packet(self, state: States, option: bytes = b"", payload: bytes = b""):
         if not isinstance(state, States):
             raise HTypeError("state", state, States)
@@ -64,15 +44,21 @@ class Scheme(object):
 
         return CSPacket(
                 protocol=self._protocol,
+                role=self._role,
                 state=state,
                 option=option,
                 payload=payload
             )
 
-    def ignore(self, source: str) -> SchemeResult:
-        return SchemeResult(
-                source,
-                self._ignore_packet,
-                False,
-                Done(False, reason = "Invalid packet")
-            )
+    def ignore(self, source: str, reason: str = "Invalid packet") -> SchemeResult:
+        if not isinstance(reason, str):
+            raise HTypeError("reason", reason, str)
+
+        packet = self.generate_packet(self._states.IGNORE)
+        packet.payload(reason.encode())
+
+        return SchemeResult(source, packet, False, Done(False, reason=reason))
+
+    def config(self, **kwargs):
+        if kwargs:
+            raise HFormatError("Unexpected parameters ({})".format(set(kwargs.keys())))
